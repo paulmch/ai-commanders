@@ -257,8 +257,11 @@ thrust axis round a cone of `EVADE_BURN_CONE_DEG` (20 deg) about the burn line -
 continuously while rounds are inbound or an armed enemy is within
 `EVADE_BURN_GUN_REACH_KM`, a fresh random cone point every half edge-to-edge swing
 (`_evade_burn_swing`, `_swing_dodge_aim`), so fire along the line is dodged too;
-armour picks only cone points; off the cone it turns toward it at full authority,
-idling to the order's token beyond `EVADE_BURN_AGAINST_ORDER_DEG` (90 deg) off;
+armour picks only cone points; off the cone it turns toward it at full authority
+and burns at the order's throttle through the whole turn (no idle; range-control
+options, the captain's ENGINE ORDER CHECK and trajectory plans include that turn
+impulse, `range_control.turn_burn_segments`; range keepers size the correction they
+note by cos(angle off), `_turn_then_burn(evade=True)`);
 RUN never below the order's throttle (rule in the `src/simulation.py` module
 docstring, `tests/test_evade_burn.py`, `scripts/evade_burn_measure.py`). On a
 throttle-0 / engine-off order (and the EVADE maneuver) it flies the drive as before:

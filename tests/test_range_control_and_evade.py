@@ -32,6 +32,7 @@ from src.llm.range_control import (
     analyze_range_control,
     admiral_range_control,
     captain_range_control,
+    format_heading_options,
     formation_heading_maneuvers,
     formation_throttles,
     ship_accel_ms2,
@@ -793,3 +794,105 @@ class TestCaptainBlockSize:
         system = " ".join(build_captain_doctrine(ship_type="destroyer", fleet_data=FLEET).split())
         assert (f"RANGE CONTROL: every heading for the most urgent group, the "
                 f"{CAPTAIN_SECONDARY_OPTIONS} key ones for the next") in system
+
+
+# =============================================================================
+# The same heading burns with evade: the overlay burns through the turn
+# (owner: "burn through the turn with the percentage given in command.
+# Predictions should account for that")
+# =============================================================================
+
+def _fly_option_evade(sim, ship, opt, evade="full"):
+    t0 = sim.current_time
+    t_end = t0 + opt.turn_s + opt.burn_s
+    h = {"x": opt.heading.x, "y": opt.heading.y, "z": opt.heading.z}
+    while sim.current_time < t_end - 1e-6:
+        if (sim.current_time - t0) % 30.0 < 1e-6:
+            sim.inject_command(ship.ship_id, Maneuver(
+                ManeuverType.HEADING, start_time=sim.current_time,
+                duration=min(30.0, t_end - sim.current_time),
+                throttle=opt.throttle, heading_direction=h, evade=evade))
+        sim.step()
+
+
+class TestEvadeTurnImpulse:
+
+    @pytest.mark.parametrize("own,foe_type,rng,closing", [
+        ("destroyer", "cruiser", 380.0, 1.5),
+        ("battlecruiser", "destroyer", 390.0, 1.0),
+        ("dreadnought", "destroyer", 390.0, 0.5),
+    ])
+    def test_cancel_with_evade_states_the_range_it_flies(self, own, foe_type, rng, closing):
+        # Nose on the enemy, an armed enemy inside EVADE_BURN_GUN_REACH_KM:
+        # the overlay swings, and the 180 deg turn onto the brake heading
+        # burns too - first toward him.
+        sim, me, foe = _duel(own, foe_type, rng, closing)
+        opt = analyze_range_control(sim, [me])[0].option("cancel")
+        assert opt.evade_effect.startswith(
+            f"evade under fire: the {opt.evade_turn_s:.0f} s turn burns too")
+        assert opt.evade_end_range_km < opt.end_range_km     # the wrong-way push costs range
+        _fly_option_evade(sim, me, opt)
+        flown = _range_km(me, foe)
+        assert flown == pytest.approx(opt.evade_end_range_km, rel=0.015)
+        assert abs(flown - opt.evade_end_range_km) < 0.4 * abs(flown - opt.end_range_km)
+        closing_now = (me.velocity - foe.velocity).dot(
+            (foe.position - me.position).normalized())
+        assert closing_now == pytest.approx(opt.evade_closing_mps, abs=70.0)
+
+    def test_open_range_with_evade_states_the_range_it_flies(self):
+        sim, me, foe = _duel("battlecruiser", "destroyer", 390.0, 1.0)
+        opt = analyze_range_control(sim, [me])[0].option("open")
+        assert "turn burns too" in opt.evade_effect
+        _fly_option_evade(sim, me, opt)
+        assert _range_km(me, foe) == pytest.approx(opt.evade_end_range_km, rel=0.01)
+
+    def test_no_evade_clause_when_the_nose_is_already_near_the_heading(self):
+        from src.llm.range_control import EVADE_NOTE_MIN_DEG
+        sim, me, foe = _duel("destroyer", "cruiser", 380.0, 1.5)
+        opt = analyze_range_control(sim, [me])[0].option("cancel")
+        me.kinematic_state.forward = opt.heading
+        again = analyze_range_control(sim, [me])[0]
+        for o in again.options:
+            off = math.degrees(me.forward.angle_to(o.heading))
+            assert bool(o.evade_effect) == (o.throttle > 0 and o.burn_s > 0 and o.key != "face"
+                                            and off >= EVADE_NOTE_MIN_DEG), o.key
+        line = format_heading_options([analyze_range_control(sim, [me])[0]])
+        assert "turn burns too" not in line.split("cancel")[1].split("\n")[0]
+
+    def test_captain_order_check_states_the_turn_impulse_with_evade(self):
+        from unittest.mock import Mock
+        from src.llm.admiral import AdmiralOrder
+        from src.llm.captain import LLMCaptain, LLMCaptainConfig
+        sim, me, foe = _duel("destroyer", "cruiser", 380.0, 1.5)
+        captain = LLMCaptain(LLMCaptainConfig(name="C", ship_name="me", ship_type="destroyer",
+                                              fleet_data=FLEET, model="anthropic/claude-sonnet-5"),
+                             client=Mock())
+        captain.ship_id = "me"
+        back = {"x": -1.0, "y": 0.0, "z": 0.0}
+
+        def check(evade):
+            spec = {"maneuver_type": "OVERLAY", "evade": "full"} if evade else None
+            return captain._order_check(AdmiralOrder(
+                target_ship_id="me", target_ship_name="me", order_text="Brake.",
+                heading=back, throttle=1.0, maneuver=spec), sim, me, [])["engine"]
+
+        plain, evading = check(False), check(True)
+        turn = sim._estimate_turn_time(me, math.pi, engines_on=True)
+        assert "turn burns too" not in plain
+        assert f"with evade under fire the {turn:.0f} s turn burns too (180° off)" in evading
+        cpa = lambda text: float(text.split("closest approach ")[1].split(" km")[0])
+        # The 180 deg turn sweeps the push through the beam: the evade burn
+        # moves the pass sideways (a merge without evade is not one with it).
+        assert cpa(plain) < MERGE_KM < cpa(evading)
+        # Flown: the heading with evade for the turn plus one checkpoint, then coasting.
+        sim.inject_command("me", Maneuver(ManeuverType.HEADING, start_time=0.0,
+                                          duration=turn + 30.0, throttle=1.0,
+                                          heading_direction=back, evade="full"))
+        closest = float("inf")
+        for _ in range(450):
+            sim.step()
+            if sim.current_time >= turn + 30.0 and me.current_maneuver.maneuver_type != \
+                    ManeuverType.MAINTAIN:
+                _coast(me)
+            closest = min(closest, _range_km(me, foe))
+        assert closest == pytest.approx(cpa(evading), rel=0.15)

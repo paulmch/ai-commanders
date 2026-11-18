@@ -1361,11 +1361,15 @@ class LLMCaptain:
 
     def _cpa_under_burn(self, simulation: Any, ship: Any, enemies: List[Any],
                         direction: Any, throttle: float, burn_s: float,
-                        horizon_s: float = 600.0) -> Optional[Tuple[float, float, str, float]]:
+                        horizon_s: float = 600.0,
+                        evade: bool = False) -> Optional[Tuple[float, float, str, float]]:
         """
         Closest approach to any enemy if this ship turns onto ``direction``,
         burns ``burn_s`` at ``throttle`` and then coasts (enemies coast).
         Returns (cpa_km, t_s, enemy name, relative speed km/s at the pass).
+        ``evade``: the order carries the evade overlay, which under fire burns
+        through the turn as well (range_control.turn_burn_segments) and swings
+        the burn inside its cone afterwards (cos(cone) of the push on the line).
         """
         from ..physics import Vector3D
         try:
@@ -1380,6 +1384,12 @@ class LLMCaptain:
             except (AttributeError, TypeError, ValueError):
                 turn_s = 0.0
         a = d * (accel * max(0.0, min(1.0, throttle)))
+        turn_segs: List[Any] = []
+        if evade and accel > 0 and hasattr(simulation, "_evade_burn_swing"):
+            from .range_control import turn_burn_segments
+            turn_s, turn_segs = turn_burn_segments(
+                simulation, [ship], d, accel * max(0.0, min(1.0, throttle)))
+            a = a * math.cos(simulation._evade_burn_swing(ship)[0])
         best = None
         dt = 1.0
         for e in enemies:
@@ -1388,6 +1398,9 @@ class LLMCaptain:
             t = 0.0
             while t < horizon_s:
                 acc = a if turn_s <= t < turn_s + burn_s else Vector3D(0.0, 0.0, 0.0)
+                for t0, t1, seg in turn_segs:
+                    if t0 <= t < t1:
+                        acc = seg
                 p = p + v * dt + acc * (0.5 * dt * dt)
                 v = v + acc * dt
                 t += dt
@@ -1579,9 +1592,19 @@ class LLMCaptain:
                 motion = None
         if motion and enemies:
             label, vec, thr, burn = motion
-            res = self._cpa_under_burn(simulation, ship, enemies, vec, thr, burn)
+            evade = bool((spec or {}).get("evade")) if isinstance(spec, dict) else False
+            evade = evade or bool(getattr(order, "evade", None))
+            res = self._cpa_under_burn(simulation, ship, enemies, vec, thr, burn, evade=evade)
             if res is not None:
                 cpa_km, t_s, who, rel_kps = res
+                if evade:
+                    from .range_control import EVADE_NOTE_MIN_DEG
+                    off = math.degrees(ship.forward.angle_to(vec.normalized()))
+                    if off >= EVADE_NOTE_MIN_DEG:
+                        turn = simulation._estimate_turn_time(ship, math.radians(off),
+                                                              engines_on=True)
+                        label += (f", with evade under fire the {turn:.0f} s turn burns too "
+                                  f"({off:.0f}° off)")
                 engine = (f"{label} -> closest approach {cpa_km:.1f} km to {who} in {t_s:.0f} s, "
                           f"passing at {rel_kps:.1f} km/s")
                 if cpa_km < MERGE_KM:

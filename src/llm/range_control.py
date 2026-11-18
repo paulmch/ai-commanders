@@ -156,6 +156,53 @@ def _turn_time(sim: Any, ships: Sequence[Any], direction: Vector3D, engines_on: 
     return worst
 
 
+# The evade overlay on a burning order burns at the order's throttle through
+# the whole turn onto the heading (simulation module docstring: "burn through
+# the turn with the percentage given in command"), so for part of a long turn
+# it pushes the wrong way. A burn option whose slowest hull is at least
+# EVADE_NOTE_MIN_DEG off its heading also states what the same order does
+# with evade; the turn is integrated in EVADE_TURN_SEGMENTS constant-thrust
+# pieces along the swinging nose (bang-bang turn, the engine's estimator).
+EVADE_NOTE_MIN_DEG = 90.0
+EVADE_TURN_SEGMENTS = 8
+
+
+def turn_burn_segments(sim: Any, ships: Sequence[Any], heading: Vector3D, accel: float,
+                       start: float = 0.0) -> Tuple[float, List[Tuple[float, float, Vector3D]]]:
+    """
+    (turn s, thrust segments) of a burn at ``accel`` (m/s^2, throttle
+    included) flown through the turn onto ``heading``, as the evade overlay
+    flies it: the slowest-turning hull that can burn turns bang-bang on
+    thrust vectoring along the great circle from its nose to the heading
+    while the drive pushes along the nose. Segments start at ``start``.
+    """
+    worst, turn = None, 0.0
+    for ship in _can_burn(ships):
+        t = sim._estimate_turn_time(ship, ship.forward.angle_to(heading), engines_on=True)
+        if worst is None or t > turn:
+            worst, turn = ship, t
+    if worst is None or turn <= 0.0 or accel <= 0.0:
+        return 0.0, []
+    f = worst.forward
+    theta = f.angle_to(heading)
+    axis = f.cross(heading)
+    if axis.magnitude < 1e-6:
+        up = getattr(worst, "up", None) or Vector3D(0.0, 0.0, 1.0)
+        axis = up - f * up.dot(f)
+        if axis.magnitude < 1e-6:
+            axis = Vector3D(0.0, 0.0, 1.0) - f * f.z
+    axis = axis.normalized()
+    segs = []
+    for k in range(EVADE_TURN_SEGMENTS):
+        a_t = turn * k / EVADE_TURN_SEGMENTS
+        b_t = turn * (k + 1) / EVADE_TURN_SEGMENTS
+        x = 0.5 * (a_t + b_t) / turn
+        frac = 2.0 * x * x if x < 0.5 else 1.0 - 2.0 * (1.0 - x) ** 2
+        nose = f.rotate_around_axis(axis, theta * frac).normalized()
+        segs.append((start + a_t, start + b_t, nose * accel))
+    return turn, segs
+
+
 def _burn_start(sim: Any, ships: Sequence[Any], direction: Vector3D) -> float:
     """
     Seconds until a HEADING burn along ``direction`` lights up for the whole
@@ -369,6 +416,13 @@ class HeadingOption:
     cpa_t_s: Optional[float] = None
     end_range_km: Optional[float] = None
     rel_speed_end_kps: Optional[float] = None
+    # The same order with evade: it burns through the turn (EVADE_NOTE_MIN_DEG).
+    evade_effect: str = ""
+    evade_turn_s: Optional[float] = None
+    evade_end_range_km: Optional[float] = None
+    evade_rel_speed_end_kps: Optional[float] = None
+    evade_cpa_km: Optional[float] = None
+    evade_closing_mps: Optional[float] = None
 
     def heading_str(self) -> str:
         h = self.heading
@@ -389,6 +443,8 @@ class HeadingOption:
             val = getattr(self, k)
             if val is not None:
                 d[k] = round(val, 2 if k == "rel_speed_end_kps" else 1)
+        if self.evade_effect:
+            d["with_evade"] = self.evade_effect
         return d
 
 
@@ -901,6 +957,46 @@ def _analyze_group(sim, own, own_pos, own_vel, accel, members, interval_s, detai
                 f"MERGE IN {base_t:.0f} s at {at} unless you act: braking must start "
                 f"within {slack_s:.0f} s (need {need_km:.0f} km incl. flip, have "
                 f"{info.range_km:.0f} km).")
+
+    # ---- the same burns with evade: the turn burns too --------------------
+    burners = _can_burn(own)
+    for opt in info.options:
+        if opt.throttle <= 0 or opt.burn_s <= 0 or opt.key == "face" or not burners:
+            continue
+        off = max(s.forward.angle_to(opt.heading) for s in burners)
+        if off < math.radians(EVADE_NOTE_MIN_DEG):
+            continue
+        thrust = accel * opt.throttle
+        turn, segs = turn_burn_segments(sim, own, opt.heading, thrust)
+        end = max(opt.turn_s + opt.burn_s, turn)
+        if end > turn:
+            # On the line the swing keeps cos(cone) of the push along it.
+            along = min(math.cos(sim._evade_burn_swing(s)[0]) for s in burners)
+            segs = segs + [(turn, end, opt.heading * (thrust * along))]
+        cancel = opt.key == "cancel"
+        m_min, m_t, _, (pe, ve) = evaluate(
+            segs, probe=end, enemy_until=max(ENEMY_ACCEL_HOLD_S, end),
+            horizon=end if cancel else CPA_HORIZON_S)
+        opt.evade_turn_s = turn
+        opt.evade_end_range_km = pe.magnitude / 1000.0
+        opt.evade_rel_speed_end_kps = ve.magnitude / 1000.0
+        opt.evade_cpa_km = m_min / 1000.0
+        los_e = (pe * -1.0).normalized() if pe.magnitude > 1.0 else los
+        closing_e = ve.dot(los_e)
+        opt.evade_closing_mps = closing_e
+        head = f"evade under fire: the {turn:.0f} s turn burns too ->"
+        if cancel:
+            rate = (f"closing {closing_e:.0f} m/s" if closing_e > 0
+                    else f"opening {-closing_e:.0f} m/s")
+            text = f"{head} {rate} at {end:.0f} s, ~{pe.magnitude / 1000.0:.0f} km"
+            if m_min / 1000.0 < 0.8 * opt.evade_end_range_km and m_t > 1.0:
+                text += f" (passes {m_min / 1000.0:.0f} km first)"
+        else:
+            c_e = closing_e / 1000.0
+            rate = f"closing {c_e:.2f}" if c_e > 0 else f"opening {-c_e:.2f}"
+            text = (f"{head} {pe.magnitude / 1000.0:.0f} km, {rate} km/s, CPA "
+                    f"{m_min / 1000.0:.0f} km")
+        opt.evade_effect = text
     return info
 
 
@@ -1044,8 +1140,11 @@ def _option_line(opt: HeadingOption, target_name: str, verb: str = "set_heading"
                 f"{target_name}: {opt.effect} | {opt.aspect}")
     if opt.throttle <= 0:
         return f"  {label:<14} {opt.effect}"
-    return (f"  {label:<14} {verb}{opt.heading_str()} @{opt.throttle * 100:.0f}% "
+    line = (f"  {label:<14} {verb}{opt.heading_str()} @{opt.throttle * 100:.0f}% "
             f"{opt.effect} | {opt.aspect}")
+    if opt.evade_effect:
+        line += f" | {opt.evade_effect}"
+    return line
 
 
 # Burn options whose headings are this close are one option ("pass wide"

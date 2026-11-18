@@ -265,9 +265,12 @@ was reviewed. It had two defects, fixed in a second round:
   - Rounds from abeam give the side. Rounds within 30 degrees of the line, ahead or astern,
     get a uniformly random azimuth, from the keyed jink RNG.
 - **Armour picks** are cone points only.
-- **Off the cone**, the hull turns toward the cone at full authority. With the nose more than
-  90 degrees off the line (`EVADE_BURN_AGAINST_ORDER_DEG`) the drive idles to the order's own
-  turn token, because it would otherwise push against the order.
+- **Off the cone**, the hull turns toward the cone at full authority and the drive burns at
+  the order's throttle through the whole turn (owner's decision, round 3: "burn through the
+  turn with the percentage given in command"; the round-2 idle beyond 90 degrees is gone).
+  Range-control options, the captain's ENGINE ORDER CHECK and the trajectory plans include
+  the turn impulse; HOLD_RANGE / standoff keepers size the correction they note by the
+  cosine of the angle off (feed-forward, `_turn_then_burn(evade=True)`).
 - **Unchanged:** engine-off orders and the EVADE maneuver, bit for bit (228 seeded engagements
   compared with the parent, 0 differ).
 

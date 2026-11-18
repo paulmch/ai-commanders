@@ -1137,8 +1137,10 @@ MANEUVERS:
   round that cone, a new random point every few seconds, so rounds led onto you miss -
   from any bearing, ahead and astern too; a round it cannot dodge gets the best armor it
   can reach inside the cone (a round from abeam or astern still strikes the flank or the
-  tail). With your nose more than 90° off your line (turning onto a new heading, or back
-  after a RUN) the drive idles while the ship turns, as without evade. RUN (evade full, a
+  tail). Turning onto a new heading (or back after a RUN) under fire or near enemy guns it
+  burns at your throttle through the whole turn - a heading without evade idles until the
+  nose is on - so a turn of more than 90° first pushes the wrong way; the range headings
+  state that impulse ("evade under fire: the N s turn burns too"). RUN (evade full, a
   guided torpedo) leaves the line to burn away from it, never below your throttle. On an
   order that does
   not burn (PADLOCK, MAINTAIN, throttle 0) and as the EVADE maneuver, evasion owns the
@@ -2881,8 +2883,10 @@ MANEUVERS (tell captains which to use):
   guns are within 400 km, keeps swinging the thrust round a cone 20° off the ordered line
   (~94% of the push stays on it) - a dodge against fire from any bearing; it turns armour
   onto a round it cannot dodge only inside that cone - a round from abeam or astern
-  still strikes the flank or tail; with the nose more than 90° off the line (a new
-  heading, after a RUN) the drive idles while it turns; RUN (full, vs a guided torpedo)
+  still strikes the flank or tail; turning onto a new heading (or back after a RUN) it
+  burns at the order's throttle through the whole turn, so a turn of more than 90° first
+  pushes the wrong way (HEADINGS rows state it: "evade under fire: the N s turn burns
+  too"); RUN (full, vs a guided torpedo)
   leaves the line to burn away. Measured (seeded, 24 runs each): a destroyer burning
   across the line of fire of 3 gun ships 120-200 km off (nose already on its heading)
   burned on its order 98% of the time under fire and took 12% of the rounds fired at it,
@@ -2891,8 +2895,8 @@ MANEUVERS (tell captains which to use):
   (47% without), on the tail and flank; tail hits wreck the drive, and a damaged drive
   dodges far less (14% of rounds hit while it was intact, 54% after): it was lost in 16
   of 24 runs with the overlay, 24 of 24 without. A destroyer cancelling 2 km/s of
-  closure with its nose still on the enemy: closing at 1.3 km/s after 60 s with the
-  overlay, 1.7 without it (lost in 14 and 16 of 24 runs). On an order that does not
+  closure with its nose still on the enemy: closing at 1.7 km/s after 60 s with the
+  overlay, 1.7 without it (lost in 4 and 16 of 24 runs). On an order that does not
   burn (PADLOCK, MAINTAIN, throttle 0) the overlay flies the drive: jinks at full
   throttle, TANK (half throttle) or BRACE (drive off).
 - BRAKE: burn against the ship's own (world-frame) velocity
